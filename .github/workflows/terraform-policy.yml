@@ -1,0 +1,46 @@
+name: Terraform policy
+
+on:
+  pull_request:
+    paths:
+      - "**/*.tf"
+      - "policy/**"
+      - ".github/workflows/terraform-policy.yml"
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  plan-and-policy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+          terraform_wrapper: false
+
+      - name: Install Conftest
+        env:
+          CONFTEST_VERSION: 0.62.0
+        run: |
+          curl -fsSL "https://github.com/open-policy-agent/conftest/releases/download/v${CONFTEST_VERSION}/conftest_${CONFTEST_VERSION}_Linux_x86_64.tar.gz" \
+            | sudo tar -xz -C /usr/local/bin conftest
+          conftest --version
+
+      - name: Terraform plan as JSON
+        run: |
+          terraform init -backend=false
+          terraform validate
+          terraform plan -input=false -out=tfplan
+          terraform show -json tfplan > plan.json
+
+      - name: Shift-left policy check
+        run: conftest test plan.json --policy policy --all-namespaces
+
+      - name: Policy unit tests
+        run: conftest verify --policy policy
+
