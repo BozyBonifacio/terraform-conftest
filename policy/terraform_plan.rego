@@ -10,21 +10,41 @@ managed_resources contains resource if {
 deny contains msg if {
   resource := managed_resources[_]
   resource.type == "terraform_data"
-  not non_empty(resource.values.input.owner)
-  msg := sprintf("%s must set a non-empty input.owner", [resource.address])
+
+  owner := object.get(resource.values.input, "owner", "")
+  not non_empty(owner)
+
+  msg := sprintf(
+    "%s must set a non-empty input.owner",
+    [resource.address],
+  )
 }
 
 deny contains msg if {
   resource := managed_resources[_]
   resource.type == "terraform_data"
-  not allowed_environment(resource.values.input.environment)
-  msg := sprintf("%s input.environment must be development, staging, or production", [resource.address])
+
+  environment := object.get(
+    resource.values.input,
+    "environment",
+    "",
+  )
+  not allowed_environment(environment)
+
+  msg := sprintf(
+    "%s input.environment must be development, staging, or production",
+    [resource.address],
+  )
 }
 
 deny contains msg if {
   change := input.resource_changes[_]
   "delete" in change.change.actions
-  msg := sprintf("%s cannot be deleted without an explicit policy exception", [change.address])
+
+  msg := sprintf(
+    "%s cannot be deleted without an explicit policy exception",
+    [change.address],
+  )
 }
 
 non_empty(value) if {
@@ -33,6 +53,9 @@ non_empty(value) if {
 }
 
 allowed_environment(value) if {
-  value in {"development", "staging", "production"}
+  value in {
+    "development",
+    "staging",
+    "production",
+  }
 }
-
