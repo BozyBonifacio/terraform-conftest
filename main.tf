@@ -8,7 +8,7 @@ resource "terraform_data" "application" {
   input = {
     name        = "shift-left-demo"
     owner       = "platform-team"
-    environment = "development"
+    environment = "sandbox"
   }
 }
 
