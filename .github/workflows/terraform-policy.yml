@@ -11,6 +11,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: write
 
 jobs:
   plan-and-policy:
@@ -38,8 +39,107 @@ jobs:
           terraform plan -input=false -out=tfplan
           terraform show -json tfplan > plan.json
 
-      - name: Shift-left policy check
-        run: conftest test plan.json --policy policy --all-namespaces
+      - name: Run shift-left policy check
+        id: conftest
+        shell: bash
+        run: |
+          set +e
+          conftest test plan.json \
+            --policy policy \
+            --all-namespaces \
+            --output stdout 2>&1 | tee conftest-output.txt
+
+          echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Add policy result to workflow summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## Terraform policy result"
+            echo
+            echo '```text'
+            cat conftest-output.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Display policy result in pull request
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        env:
+          POLICY_EXIT_CODE: ${{ steps.conftest.outputs.exit_code }}
+        with:
+          script: |
+            const fs = require("fs");
+            const marker = "<!-- terraform-policy-result -->";
+            const output = fs.readFileSync(
+              "conftest-output.txt",
+              "utf8"
+            ).slice(0, 60000);
+
+            const passed = process.env.POLICY_EXIT_CODE === "0";
+            const heading = passed
+              ? "✅ Terraform policy check passed"
+              : "❌ Terraform policy check failed";
+
+            const body = [
+              marker,
+              `## ${heading}`,
+              "",
+              "<details open>",
+              "<summary>Conftest output</summary>",
+              "",
+              "```text",
+              output,
+              "```",
+              "</details>",
+              "",
+              `[View workflow run](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`
+            ].join("\n");
+
+            const comments = await github.paginate(
+              github.rest.issues.listComments,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                per_page: 100
+              }
+            );
+
+            const previous = comments.find(
+              comment =>
+                comment.user.type === "Bot" &&
+                comment.body.includes(marker)
+            );
+
+            if (previous) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: previous.id,
+                body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body
+              });
+            }
+
+      - name: Enforce policy result
+        if: always()
+        shell: bash
+        env:
+          POLICY_EXIT_CODE: ${{ steps.conftest.outputs.exit_code }}
+        run: |
+          if [[ "$POLICY_EXIT_CODE" != "0" ]]; then
+            echo "::error title=Terraform policy violation::Conftest rejected the Terraform plan. See the PR comment for details."
+            exit 1
+          fi
 
       - name: Policy unit tests
         run: conftest verify --policy policy
